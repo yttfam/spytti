@@ -172,7 +172,11 @@ async fn run_spirc(
 
     let msg = format!("Spirc started, device '{}' visible on Spotify Connect", config.name);
     info!("{msg}");
-    state.write().await.push_log(msg);
+    let mut s = state.write().await;
+    s.push_log(msg);
+    s.restarting = false;
+    drop(s);
+
 
     let spirc_handle = tokio::spawn(spirc_task);
 
@@ -180,7 +184,7 @@ async fn run_spirc(
         tokio::select! {
             event = event_rx.recv() => {
                 match event {
-                    Some(PlayerEvent::Playing { track_id, .. }) => {
+                    Some(PlayerEvent::Playing { track_id, position_ms, .. }) => {
                         match Track::get(session, &track_id).await {
                             Ok(track) => {
                                 let artist_name = track.artists.0.first()
@@ -202,6 +206,8 @@ async fn run_spirc(
                                 s.artist = artist_name;
                                 s.album = track.album.name;
                                 s.cover_url = cover_url;
+                                s.last_track_uri = track_id.to_string();
+                                s.last_position_ms = position_ms;
                                 let msg = format!("Playing: {} - {}", s.artist, s.track);
                                 info!("{msg}");
                                 s.push_log(msg);
@@ -212,8 +218,13 @@ async fn run_spirc(
                             }
                         }
                     }
-                    Some(PlayerEvent::Paused { .. }) => {
-                        state.write().await.playing = false;
+                    Some(PlayerEvent::PositionChanged { position_ms, .. } | PlayerEvent::Seeked { position_ms, .. }) => {
+                        state.write().await.last_position_ms = position_ms;
+                    }
+                    Some(PlayerEvent::Paused { position_ms, .. }) => {
+                        let mut s = state.write().await;
+                        s.playing = false;
+                        s.last_position_ms = position_ms;
                     }
                     Some(PlayerEvent::Stopped { .. }) => {
                         let mut s = state.write().await;
@@ -253,10 +264,11 @@ async fn run_spirc(
                         let _ = spirc.disconnect(true);
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-                        let msg = format!("Switching output device to '{dev}'");
+                        let msg = format!("Switching output device to '{dev}' — reselect in Spotify app");
                         info!("{msg}");
                         let mut s = state.write().await;
                         s.push_log(msg);
+                        s.restarting = true;
                         s.playing = false;
                         s.device = dev;
                         drop(s);

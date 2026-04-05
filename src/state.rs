@@ -12,6 +12,9 @@ pub struct SharedState {
     pub cover_url: String,
     pub volume: u16,
     pub device: String,
+    pub restarting: bool,
+    pub last_track_uri: String,
+    pub last_position_ms: u32,
     pub logs: Vec<String>,
 }
 

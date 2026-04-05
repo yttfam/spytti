@@ -157,6 +157,22 @@ input[type=range]::-webkit-slider-thumb {
   margin-top: 0.5rem;
   color: #1db954;
 }
+.restart-banner {
+  display: none;
+  margin-top: 1.5rem;
+  padding: 0.6rem 1rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  color: #f0a020;
+  transition: all 0.3s;
+}
+.restart-banner.visible { display: block; }
+.restart-banner.ok {
+  color: #1db954;
+  border-color: #1db954;
+}
 .log-btn {
   margin-top: 2rem;
   background: none;
@@ -240,6 +256,7 @@ input[type=range]::-webkit-slider-thumb {
     <input type="range" id="vol" min="0" max="100" value="30">
     <div class="volume-value" id="vol-val">30</div>
   </div>
+  <div class="restart-banner" id="restart-banner"></div>
   <button class="log-btn" onclick="openLogs()">View Logs</button>
 </div>
 
@@ -274,6 +291,16 @@ async function poll() {
       $('cover-wrap').classList.remove('empty');
     } else {
       $('cover-wrap').classList.add('empty');
+    }
+
+    const banner = $('restart-banner');
+    if (d.restarting) {
+      banner.textContent = 'Restarting, please wait...';
+      banner.className = 'restart-banner visible';
+    } else if (banner.classList.contains('visible') && !banner.classList.contains('ok')) {
+      banner.textContent = 'Restarted — reselect in Spotify app';
+      banner.className = 'restart-banner visible ok';
+      setTimeout(() => { banner.className = 'restart-banner'; }, 3000);
     }
 
     if (polling) {

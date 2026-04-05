@@ -25,6 +25,7 @@ struct StatusResponse {
     volume: u16,
     device: String,
     cover_url: String,
+    restarting: bool,
 }
 
 #[derive(Deserialize)]
@@ -61,6 +62,7 @@ async fn status(State(state): State<WebState>) -> Json<StatusResponse> {
         volume: s.volume,
         device: s.device.clone(),
         cover_url: s.cover_url.clone(),
+        restarting: s.restarting,
     })
 }
 
