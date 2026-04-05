@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spytti</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, system-ui, sans-serif;
+  background: #111;
+  color: #eee;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+}
+.container {
+  text-align: center;
+  padding: 2rem;
+  max-width: 400px;
+  width: 100%;
+}
+.status-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #555;
+  margin-right: 8px;
+  transition: background 0.3s;
+}
+.status-dot.playing { background: #1db954; }
+.track {
+  font-size: 1.4rem;
+  font-weight: 600;
+  margin: 1.5rem 0 0.3rem;
+  min-height: 1.4rem;
+}
+.artist {
+  font-size: 1rem;
+  color: #aaa;
+  min-height: 1rem;
+}
+.album {
+  font-size: 0.85rem;
+  color: #666;
+  margin-top: 0.2rem;
+  min-height: 0.85rem;
+}
+.volume-section {
+  margin-top: 2rem;
+}
+.volume-label {
+  font-size: 0.8rem;
+  color: #888;
+  margin-bottom: 0.5rem;
+}
+input[type=range] {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: #333;
+  outline: none;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #1db954;
+  cursor: pointer;
+}
+.volume-value {
+  font-size: 1.2rem;
+  margin-top: 0.5rem;
+  color: #1db954;
+}
+.idle {
+  color: #555;
+  font-size: 1rem;
+  margin-top: 1.5rem;
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <div>
+    <span class="status-dot" id="dot"></span>
+    <span id="status-text" style="color:#888;font-size:0.85rem">Idle</span>
+  </div>
+  <div class="track" id="track"></div>
+  <div class="artist" id="artist"></div>
+  <div class="album" id="album"></div>
+  <div class="volume-section">
+    <div class="volume-label">VOLUME</div>
+    <input type="range" id="vol" min="0" max="100" value="30">
+    <div class="volume-value" id="vol-val">30</div>
+  </div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const vol = $('vol');
+let debounce = null;
+let polling = true;
+
+async function poll() {
+  try {
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    $('dot').className = 'status-dot' + (d.playing ? ' playing' : '');
+    $('status-text').textContent = d.playing ? 'Playing' : 'Idle';
+    $('track').textContent = d.track || '';
+    $('artist').textContent = d.artist || '';
+    $('album').textContent = d.album || '';
+    if (polling) {
+      vol.value = d.volume;
+      $('vol-val').textContent = d.volume;
+    }
+  } catch(e) {}
+}
+
+vol.addEventListener('input', () => {
+  polling = false;
+  $('vol-val').textContent = vol.value;
+  clearTimeout(debounce);
+  debounce = setTimeout(async () => {
+    await fetch('/api/volume', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({volume: parseInt(vol.value)})
+    });
+    setTimeout(() => { polling = true; }, 1000);
+  }, 150);
+});
+
+poll();
+setInterval(poll, 2000);
+</script>
+</body>
+</html>

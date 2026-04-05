@@ -1,0 +1,6 @@
+name = "Spotify Salon"
+bitrate = 320
+device = "auto"
+cache = "/var/cache/spytti"
+port = 8080
+initial_volume = 30

@@ -1,0 +1,16 @@
+[Unit]
+Description=Spytti - Spotify Connect Daemon
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/spytti
+Restart=always
+RestartSec=5
+User=spytti
+Group=audio
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target
