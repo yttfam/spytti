@@ -3,10 +3,12 @@ use crate::state::AppState;
 use librespot::core::cache::Cache;
 use librespot::core::config::SessionConfig;
 use librespot::core::session::Session;
+use librespot::core::authentication::Credentials;
 use librespot::connect::ConnectConfig;
 use librespot::discovery::Discovery;
 use librespot::core::config::DeviceType;
-use librespot::metadata::{Metadata, Track};
+use librespot::metadata::{Metadata, Track, Album};
+use librespot::metadata::image::ImageSize;
 use librespot::playback::audio_backend;
 use librespot::playback::config::{AudioFormat, Bitrate, PlayerConfig};
 use librespot::playback::mixer::{self, MixerConfig};
@@ -20,6 +22,7 @@ pub enum SpotifyCommand {
     PlayPause,
     Next,
     Prev,
+    SetDevice(String),
 }
 
 pub async fn run(
@@ -28,20 +31,26 @@ pub async fn run(
     mut cmd_rx: mpsc::Receiver<SpotifyCommand>,
 ) {
     loop {
-        if let Err(e) = run_inner(&config, &state, &mut cmd_rx).await {
-            error!("Spotify session error: {e}, restarting in 5s...");
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        if let Err(e) = run_session(&config, &state, &mut cmd_rx).await {
+            let msg = format!("Spotify session error: {e}, restarting in 2s...");
+            error!("{msg}");
+            state.write().await.push_log(msg);
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
     }
 }
 
-async fn run_inner(
+/// Outer loop: manages session, discovery, credentials.
+/// Only recreated on actual session errors (auth failure, network down).
+async fn run_session(
     config: &Config,
     state: &AppState,
     cmd_rx: &mut mpsc::Receiver<SpotifyCommand>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let session_config = SessionConfig::default();
+    let mut session_config = SessionConfig::default();
+    session_config.ap_port = Some(443);
     let device_id = session_config.device_id.clone();
+    let client_id = session_config.client_id.clone();
 
     let cache = Cache::new(
         Some(config.cache.clone()),
@@ -50,18 +59,18 @@ async fn run_inner(
         None,
     )?;
 
-    // Try cached credentials first, fall back to zeroconf discovery
+    // Always start Zeroconf discovery so Spotify sees us on the local network.
+    let mut discovery = Discovery::builder(device_id, client_id)
+        .name(config.name.clone())
+        .device_type(DeviceType::Speaker)
+        .launch()?;
+    info!("Zeroconf discovery started as '{}'", config.name);
+
     let credentials = if let Some(creds) = cache.credentials() {
         info!("Using cached credentials");
         creds
     } else {
-        info!("No cached credentials, starting Zeroconf discovery as '{}'", config.name);
-        let client_id = SessionConfig::default().client_id;
-        let mut discovery = Discovery::builder(device_id.clone(), client_id)
-            .name(config.name.clone())
-            .device_type(DeviceType::Speaker)
-            .launch()?;
-
+        info!("Waiting for Spotify app to connect...");
         use futures_util::StreamExt;
         let creds = discovery.next().await
             .ok_or("Discovery stream ended without credentials")?;
@@ -69,15 +78,54 @@ async fn run_inner(
         creds
     };
 
-    // Create session (Spirc::new will connect it)
+    // Keep discovery alive in the background for LAN visibility
+    tokio::spawn(async move {
+        use futures_util::StreamExt;
+        while let Some(_creds) = discovery.next().await {}
+    });
+
     let session = Session::new(session_config, Some(cache));
 
-    // Mixer
+    {
+        let mut s = state.write().await;
+        s.volume = config.initial_volume;
+    }
+
+    // Inner loop: recreates player/spirc on device switch, reuses session.
+    loop {
+        match run_spirc(config, state, cmd_rx, &session, &credentials).await {
+            Ok(SpircExit::DeviceSwitch) => {
+                info!("Device switched, recreating player...");
+                continue;
+            }
+            Ok(SpircExit::Shutdown) => {
+                return Ok(());
+            }
+            Err(e) => {
+                return Err(e);
+            }
+        }
+    }
+}
+
+enum SpircExit {
+    DeviceSwitch,
+    Shutdown,
+}
+
+/// Inner loop: manages player, mixer, spirc.
+/// Returns DeviceSwitch to recreate with new device, or error to restart session.
+async fn run_spirc(
+    config: &Config,
+    state: &AppState,
+    cmd_rx: &mut mpsc::Receiver<SpotifyCommand>,
+    session: &Session,
+    credentials: &Credentials,
+) -> Result<SpircExit, Box<dyn std::error::Error + Send + Sync>> {
     let mixer_config = MixerConfig::default();
     let mixer_fn = mixer::find(Some("softvol")).expect("No softmixer available");
     let mixer = mixer_fn(mixer_config)?;
 
-    // Player
     let player_config = PlayerConfig {
         bitrate: match config.bitrate {
             96 => Bitrate::Bitrate96,
@@ -87,10 +135,11 @@ async fn run_inner(
         ..Default::default()
     };
 
-    let device = if config.device == "auto" {
+    let current_device = state.read().await.device.clone();
+    let device = if current_device.is_empty() || current_device == "auto" {
         None
     } else {
-        Some(config.device.clone())
+        Some(current_device)
     };
 
     let volume_getter = mixer.get_soft_volume();
@@ -106,7 +155,6 @@ async fn run_inner(
 
     let mut event_rx = player.get_player_event_channel();
 
-    // Spirc (Spotify Connect)
     let connect_config = ConnectConfig {
         name: config.name.clone(),
         device_type: DeviceType::Speaker,
@@ -114,41 +162,54 @@ async fn run_inner(
         ..Default::default()
     };
 
-    {
-        let mut s = state.write().await;
-        s.volume = config.initial_volume;
-    }
-
     let (spirc, spirc_task) = Spirc::new(
         connect_config,
         session.clone(),
-        credentials,
+        credentials.clone(),
         player,
         mixer,
     ).await?;
 
-    info!("Spirc started, device '{}' visible on Spotify Connect", config.name);
+    let msg = format!("Spirc started, device '{}' visible on Spotify Connect", config.name);
+    info!("{msg}");
+    state.write().await.push_log(msg);
 
     let spirc_handle = tokio::spawn(spirc_task);
 
-    loop {
+    let exit = loop {
         tokio::select! {
             event = event_rx.recv() => {
                 match event {
                     Some(PlayerEvent::Playing { track_id, .. }) => {
-                        match Track::get(&session, &track_id).await {
+                        match Track::get(session, &track_id).await {
                             Ok(track) => {
                                 let artist_name = track.artists.0.first()
                                     .map(|a| a.name.clone())
                                     .unwrap_or_default();
+
+                                let cover_url = match Album::get(session, &track.album.id).await {
+                                    Ok(album) => album.covers.0.iter()
+                                        .find(|img| img.size == ImageSize::LARGE)
+                                        .or_else(|| album.covers.0.first())
+                                        .map(|img| format!("https://i.scdn.co/image/{}", img.id.to_base16()))
+                                        .unwrap_or_default(),
+                                    Err(_) => String::new(),
+                                };
+
                                 let mut s = state.write().await;
                                 s.playing = true;
                                 s.track = track.name;
                                 s.artist = artist_name;
                                 s.album = track.album.name;
-                                info!("Playing: {} - {}", s.artist, s.track);
+                                s.cover_url = cover_url;
+                                let msg = format!("Playing: {} - {}", s.artist, s.track);
+                                info!("{msg}");
+                                s.push_log(msg);
                             }
-                            Err(e) => warn!("Failed to fetch track metadata: {e}"),
+                            Err(e) => {
+                                warn!("Failed to fetch track metadata: {e}");
+                                state.write().await.push_log(format!("WARN: metadata fetch failed: {e}"));
+                            }
                         }
                     }
                     Some(PlayerEvent::Paused { .. }) => {
@@ -167,7 +228,7 @@ async fn run_inner(
                     }
                     None => {
                         warn!("Player event channel closed");
-                        break;
+                        break Err("Player event channel closed (sink error?)".into());
                     }
                     _ => {}
                 }
@@ -188,16 +249,29 @@ async fn run_inner(
                     Some(SpotifyCommand::Prev) => {
                         let _ = spirc.prev();
                     }
+                    Some(SpotifyCommand::SetDevice(dev)) => {
+                        let _ = spirc.disconnect(true);
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+                        let msg = format!("Switching output device to '{dev}'");
+                        info!("{msg}");
+                        let mut s = state.write().await;
+                        s.push_log(msg);
+                        s.playing = false;
+                        s.device = dev;
+                        drop(s);
+
+                        break Ok(SpircExit::DeviceSwitch);
+                    }
                     None => {
-                        info!("Command channel closed, shutting down");
-                        break;
+                        break Ok(SpircExit::Shutdown);
                     }
                 }
             }
         }
-    }
+    };
 
     let _ = spirc.shutdown();
     spirc_handle.abort();
-    Ok(())
+    exit
 }

@@ -1,3 +1,4 @@
+mod audio;
 mod config;
 mod spotify;
 mod state;
@@ -10,7 +11,7 @@ async fn main() {
     tracing_subscriber::fmt::init();
 
     let config = config::Config::load();
-    let app_state = state::new_state(config.initial_volume);
+    let app_state = state::new_state(config.initial_volume, &config.device);
 
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
 

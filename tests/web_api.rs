@@ -59,11 +59,33 @@ mod ui {
     fn references_all_api_endpoints() {
         assert!(HTML.contains("/api/status"));
         assert!(HTML.contains("/api/volume"));
+        assert!(HTML.contains("/api/devices"));
+        assert!(HTML.contains("/api/device"));
         // Player controls go through cmd() which builds '/api/' + action
         assert!(HTML.contains("'/api/'"));
         assert!(HTML.contains("'play-pause'"));
         assert!(HTML.contains("'next'"));
         assert!(HTML.contains("'prev'"));
+    }
+
+    #[test]
+    fn has_device_selector() {
+        assert!(HTML.contains("id=\"device\""));
+        assert!(HTML.contains("<select"));
+        assert!(HTML.contains("OUTPUT DEVICE"));
+    }
+
+    #[test]
+    fn has_cover_art() {
+        assert!(HTML.contains("id=\"cover\""));
+        assert!(HTML.contains("cover_url"));
+    }
+
+    #[test]
+    fn has_log_viewer() {
+        assert!(HTML.contains("/api/logs"));
+        assert!(HTML.contains("log-overlay"));
+        assert!(HTML.contains("View Logs"));
     }
 
     #[test]

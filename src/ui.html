@@ -31,10 +31,25 @@ body {
   transition: background 0.3s;
 }
 .status-dot.playing { background: #1db954; }
+.cover {
+  margin: 1.2rem auto 0;
+  width: 200px;
+  height: 200px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #1a1a1a;
+}
+.cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.cover.empty { display: none; }
 .track {
   font-size: 1.4rem;
   font-weight: 600;
-  margin: 1.5rem 0 0.3rem;
+  margin: 1rem 0 0.3rem;
   min-height: 1.4rem;
 }
 .artist {
@@ -47,35 +62,6 @@ body {
   color: #666;
   margin-top: 0.2rem;
   min-height: 0.85rem;
-}
-.volume-section {
-  margin-top: 2rem;
-}
-.volume-label {
-  font-size: 0.8rem;
-  color: #888;
-  margin-bottom: 0.5rem;
-}
-input[type=range] {
-  -webkit-appearance: none;
-  width: 100%;
-  height: 6px;
-  border-radius: 3px;
-  background: #333;
-  outline: none;
-}
-input[type=range]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: #1db954;
-  cursor: pointer;
-}
-.volume-value {
-  font-size: 1.2rem;
-  margin-top: 0.5rem;
-  color: #1db954;
 }
 .controls {
   margin-top: 1.5rem;
@@ -115,6 +101,110 @@ input[type=range]::-webkit-slider-thumb {
   align-items: center;
   justify-content: center;
 }
+.device-section {
+  margin-top: 2rem;
+}
+.device-label {
+  font-size: 0.8rem;
+  color: #888;
+  margin-bottom: 0.5rem;
+}
+select {
+  background: #222;
+  color: #eee;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.9rem;
+  width: 100%;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.6rem center;
+}
+select:focus {
+  outline: none;
+  border-color: #1db954;
+}
+.volume-section {
+  margin-top: 1.5rem;
+}
+.volume-label {
+  font-size: 0.8rem;
+  color: #888;
+  margin-bottom: 0.5rem;
+}
+input[type=range] {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: #333;
+  outline: none;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #1db954;
+  cursor: pointer;
+}
+.volume-value {
+  font-size: 1.2rem;
+  margin-top: 0.5rem;
+  color: #1db954;
+}
+.log-btn {
+  margin-top: 2rem;
+  background: none;
+  border: 1px solid #333;
+  color: #666;
+  padding: 0.4rem 1rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: color 0.2s, border-color 0.2s;
+}
+.log-btn:hover {
+  color: #aaa;
+  border-color: #555;
+}
+.log-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.85);
+  z-index: 10;
+  padding: 1rem;
+  overflow-y: auto;
+}
+.log-overlay.open { display: block; }
+.log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+.log-header h3 { font-size: 1rem; color: #aaa; }
+.log-close {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 1.5rem;
+  cursor: pointer;
+}
+.log-close:hover { color: #eee; }
+.log-content {
+  font-family: 'SF Mono', 'Menlo', monospace;
+  font-size: 0.75rem;
+  color: #888;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
 </style>
 </head>
 <body>
@@ -122,6 +212,9 @@ input[type=range]::-webkit-slider-thumb {
   <div>
     <span class="status-dot" id="dot"></span>
     <span id="status-text" style="color:#888;font-size:0.85rem">Idle</span>
+  </div>
+  <div class="cover empty" id="cover-wrap">
+    <img id="cover" src="" alt="">
   </div>
   <div class="track" id="track"></div>
   <div class="artist" id="artist"></div>
@@ -138,12 +231,26 @@ input[type=range]::-webkit-slider-thumb {
       <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6z"/></svg>
     </button>
   </div>
+  <div class="device-section">
+    <div class="device-label">OUTPUT DEVICE</div>
+    <select id="device"></select>
+  </div>
   <div class="volume-section">
     <div class="volume-label">VOLUME</div>
     <input type="range" id="vol" min="0" max="100" value="30">
     <div class="volume-value" id="vol-val">30</div>
   </div>
+  <button class="log-btn" onclick="openLogs()">View Logs</button>
 </div>
+
+<div class="log-overlay" id="log-overlay">
+  <div class="log-header">
+    <h3>Logs</h3>
+    <button class="log-close" onclick="closeLogs()">&times;</button>
+  </div>
+  <div class="log-content" id="log-content"></div>
+</div>
+
 <script>
 const $ = id => document.getElementById(id);
 const vol = $('vol');
@@ -161,6 +268,14 @@ async function poll() {
     $('track').textContent = d.track || '';
     $('artist').textContent = d.artist || '';
     $('album').textContent = d.album || '';
+
+    if (d.cover_url) {
+      $('cover').src = d.cover_url;
+      $('cover-wrap').classList.remove('empty');
+    } else {
+      $('cover-wrap').classList.add('empty');
+    }
+
     if (polling) {
       vol.value = d.volume;
       $('vol-val').textContent = d.volume;
@@ -187,6 +302,50 @@ vol.addEventListener('input', () => {
   }, 150);
 });
 
+async function loadDevices() {
+  try {
+    const [dr, sr] = await Promise.all([
+      fetch('/api/devices'),
+      fetch('/api/status')
+    ]);
+    const devices = await dr.json();
+    const status = await sr.json();
+    const sel = $('device');
+    sel.innerHTML = '<option value="auto">Auto</option>';
+    devices.forEach(d => {
+      const opt = document.createElement('option');
+      opt.value = d.id;
+      opt.textContent = d.name + (d.rates.length ? ' (' + d.rates.join('/') + ' Hz)' : '');
+      sel.appendChild(opt);
+    });
+    sel.value = status.device || 'auto';
+  } catch(e) {}
+}
+
+$('device').addEventListener('change', async () => {
+  await fetch('/api/device', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({device: $('device').value})
+  });
+});
+
+async function openLogs() {
+  $('log-overlay').classList.add('open');
+  try {
+    const r = await fetch('/api/logs');
+    const lines = await r.json();
+    $('log-content').textContent = lines.join('\n') || 'No logs yet.';
+  } catch(e) {
+    $('log-content').textContent = 'Failed to load logs.';
+  }
+}
+
+function closeLogs() {
+  $('log-overlay').classList.remove('open');
+}
+
+loadDevices();
 poll();
 setInterval(poll, 2000);
 </script>

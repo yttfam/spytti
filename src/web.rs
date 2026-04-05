@@ -6,6 +6,7 @@ use axum::Router;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
+use crate::audio;
 use crate::spotify::SpotifyCommand;
 use crate::state::AppState;
 
@@ -22,6 +23,8 @@ struct StatusResponse {
     artist: String,
     album: String,
     volume: u16,
+    device: String,
+    cover_url: String,
 }
 
 #[derive(Deserialize)]
@@ -37,6 +40,9 @@ pub fn router(state: WebState) -> Router {
         .route("/api/play-pause", post(play_pause))
         .route("/api/next", post(next))
         .route("/api/prev", post(prev))
+        .route("/api/devices", get(devices))
+        .route("/api/device", post(set_device))
+        .route("/api/logs", get(logs))
         .route("/api/health", get(health))
         .with_state(state)
 }
@@ -53,6 +59,8 @@ async fn status(State(state): State<WebState>) -> Json<StatusResponse> {
         artist: s.artist.clone(),
         album: s.album.clone(),
         volume: s.volume,
+        device: s.device.clone(),
+        cover_url: s.cover_url.clone(),
     })
 }
 
@@ -90,6 +98,30 @@ async fn prev(State(state): State<WebState>) -> StatusCode {
     } else {
         StatusCode::INTERNAL_SERVER_ERROR
     }
+}
+
+#[derive(Deserialize)]
+struct DeviceRequest {
+    device: String,
+}
+
+async fn set_device(
+    State(state): State<WebState>,
+    Json(req): Json<DeviceRequest>,
+) -> impl IntoResponse {
+    if state.cmd_tx.send(SpotifyCommand::SetDevice(req.device.clone())).await.is_ok() {
+        (StatusCode::OK, Json(serde_json::json!({"device": req.device})))
+    } else {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "player unavailable"})))
+    }
+}
+
+async fn logs(State(state): State<WebState>) -> Json<Vec<String>> {
+    Json(state.app.read().await.logs.clone())
+}
+
+async fn devices() -> Json<Vec<audio::AudioDevice>> {
+    Json(audio::list_devices())
 }
 
 async fn health() -> StatusCode {
