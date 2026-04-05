@@ -103,3 +103,53 @@ fn dirs_next_config() -> Option<PathBuf> {
             std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config"))
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_are_sane() {
+        let config = Config::default();
+        assert_eq!(config.bitrate, 320);
+        assert_eq!(config.device, "auto");
+        assert_eq!(config.cache, PathBuf::from("/var/cache/spytti"));
+        assert_eq!(config.port, 8080);
+        assert_eq!(config.initial_volume, 30);
+        assert!(!config.name.is_empty());
+    }
+
+    #[test]
+    fn parse_full_config() {
+        let toml = r#"
+            name = "Living Room"
+            bitrate = 160
+            device = "hw:CARD=Device,DEV=0"
+            cache = "/tmp/spytti-test"
+            port = 9090
+            initial_volume = 50
+        "#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.name, "Living Room");
+        assert_eq!(config.bitrate, 160);
+        assert_eq!(config.device, "hw:CARD=Device,DEV=0");
+        assert_eq!(config.cache, PathBuf::from("/tmp/spytti-test"));
+        assert_eq!(config.port, 9090);
+        assert_eq!(config.initial_volume, 50);
+    }
+
+    #[test]
+    fn parse_partial_config_uses_defaults() {
+        let config: Config = toml::from_str(r#"name = "Kitchen""#).unwrap();
+        assert_eq!(config.name, "Kitchen");
+        assert_eq!(config.bitrate, 320);
+        assert_eq!(config.port, 8080);
+    }
+
+    #[test]
+    fn parse_empty_config() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.bitrate, 320);
+        assert_eq!(config.initial_volume, 30);
+    }
+}

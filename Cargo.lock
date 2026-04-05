@@ -3045,11 +3045,13 @@ dependencies = [
  "axum",
  "futures-util",
  "hostname",
+ "http-body-util",
  "librespot",
  "serde",
  "serde_json",
  "tokio",
  "toml",
+ "tower",
  "tracing",
  "tracing-subscriber",
 ]
