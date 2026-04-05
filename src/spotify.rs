@@ -66,10 +66,8 @@ async fn run_inner(
         creds
     };
 
-    // Connect session
+    // Create session (Spirc::new will connect it)
     let session = Session::new(session_config, Some(cache));
-    session.connect(credentials.clone(), true).await?;
-    info!("Connected to Spotify");
 
     // Mixer
     let mixer_config = MixerConfig::default();

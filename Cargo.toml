@@ -5,10 +5,12 @@ edition = "2021"
 description = "Minimal Spotify Connect daemon"
 
 [features]
-default = ["backend-rodio", "native-tls"]
+default = ["backend-rodio", "rustls", "zeroconf"]
 backend-alsa = ["librespot/alsa-backend"]
 backend-rodio = ["librespot/rodio-backend"]
+zeroconf = ["librespot/with-libmdns"]
 native-tls = ["librespot/native-tls"]
+rustls = ["librespot/rustls-tls-native-roots"]
 
 [dependencies]
 librespot = { git = "https://github.com/librespot-org/librespot", branch = "dev", default-features = false }
