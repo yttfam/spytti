@@ -17,6 +17,9 @@ use tracing::{info, warn, error};
 
 pub enum SpotifyCommand {
     SetVolume(u16),
+    PlayPause,
+    Next,
+    Prev,
 }
 
 pub async fn run(
@@ -175,6 +178,15 @@ async fn run_inner(
                         let vol_raw = (vol.min(100) as u32 * 65535 / 100) as u16;
                         let _ = spirc.set_volume(vol_raw);
                         state.write().await.volume = vol;
+                    }
+                    Some(SpotifyCommand::PlayPause) => {
+                        let _ = spirc.play_pause();
+                    }
+                    Some(SpotifyCommand::Next) => {
+                        let _ = spirc.next();
+                    }
+                    Some(SpotifyCommand::Prev) => {
+                        let _ = spirc.prev();
                     }
                     None => {
                         info!("Command channel closed, shutting down");

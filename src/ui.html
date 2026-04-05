@@ -77,10 +77,43 @@ input[type=range]::-webkit-slider-thumb {
   margin-top: 0.5rem;
   color: #1db954;
 }
-.idle {
-  color: #555;
-  font-size: 1rem;
+.controls {
   margin-top: 1.5rem;
+  display: flex;
+  justify-content: center;
+  gap: 1.5rem;
+  align-items: center;
+}
+.controls button {
+  background: none;
+  border: none;
+  color: #eee;
+  cursor: pointer;
+  padding: 0.5rem;
+  border-radius: 50%;
+  transition: color 0.2s, background 0.2s;
+  line-height: 1;
+}
+.controls button:hover {
+  color: #1db954;
+  background: rgba(255,255,255,0.05);
+}
+.controls button:active {
+  background: rgba(255,255,255,0.1);
+}
+.btn-play {
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.btn-skip {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 </style>
 </head>
@@ -93,6 +126,18 @@ input[type=range]::-webkit-slider-thumb {
   <div class="track" id="track"></div>
   <div class="artist" id="artist"></div>
   <div class="album" id="album"></div>
+  <div class="controls">
+    <button class="btn-skip" onclick="cmd('prev')" title="Previous">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+    </button>
+    <button class="btn-play" id="play-btn" onclick="cmd('play-pause')" title="Play/Pause">
+      <svg id="icon-play" width="32" height="32" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+      <svg id="icon-pause" width="32" height="32" viewBox="0 0 24 24" fill="currentColor" style="display:none"><path d="M6 19h4V5H6zm8-14v14h4V5z"/></svg>
+    </button>
+    <button class="btn-skip" onclick="cmd('next')" title="Next">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6z"/></svg>
+    </button>
+  </div>
   <div class="volume-section">
     <div class="volume-label">VOLUME</div>
     <input type="range" id="vol" min="0" max="100" value="30">
@@ -111,6 +156,8 @@ async function poll() {
     const d = await r.json();
     $('dot').className = 'status-dot' + (d.playing ? ' playing' : '');
     $('status-text').textContent = d.playing ? 'Playing' : 'Idle';
+    $('icon-play').style.display = d.playing ? 'none' : 'block';
+    $('icon-pause').style.display = d.playing ? 'block' : 'none';
     $('track').textContent = d.track || '';
     $('artist').textContent = d.artist || '';
     $('album').textContent = d.album || '';
@@ -119,6 +166,11 @@ async function poll() {
       $('vol-val').textContent = d.volume;
     }
   } catch(e) {}
+}
+
+async function cmd(action) {
+  await fetch('/api/' + action, {method: 'POST'});
+  setTimeout(poll, 300);
 }
 
 vol.addEventListener('input', () => {

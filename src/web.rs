@@ -34,6 +34,9 @@ pub fn router(state: WebState) -> Router {
         .route("/", get(index))
         .route("/api/status", get(status))
         .route("/api/volume", post(set_volume))
+        .route("/api/play-pause", post(play_pause))
+        .route("/api/next", post(next))
+        .route("/api/prev", post(prev))
         .route("/api/health", get(health))
         .with_state(state)
 }
@@ -62,6 +65,30 @@ async fn set_volume(
         (StatusCode::OK, Json(serde_json::json!({"volume": vol})))
     } else {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "player unavailable"})))
+    }
+}
+
+async fn play_pause(State(state): State<WebState>) -> StatusCode {
+    if state.cmd_tx.send(SpotifyCommand::PlayPause).await.is_ok() {
+        StatusCode::OK
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
+
+async fn next(State(state): State<WebState>) -> StatusCode {
+    if state.cmd_tx.send(SpotifyCommand::Next).await.is_ok() {
+        StatusCode::OK
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
+
+async fn prev(State(state): State<WebState>) -> StatusCode {
+    if state.cmd_tx.send(SpotifyCommand::Prev).await.is_ok() {
+        StatusCode::OK
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
     }
 }
 
