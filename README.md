@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo.png" alt="spytti" width="180"/></p>
+
 # Spytti
 
 A minimal Spotify Connect daemon in Rust. Single binary, three async tasks: librespot for Spotify Connect, axum for the web UI, and ALSA for audio output.
