@@ -23,6 +23,7 @@ pub enum SpotifyCommand {
     Next,
     Prev,
     SetDevice(String),
+    Release,
 }
 
 pub async fn run(
@@ -30,28 +31,70 @@ pub async fn run(
     state: AppState,
     mut cmd_rx: mpsc::Receiver<SpotifyCommand>,
 ) {
+    // Stable device_id + Discovery live for the program's lifetime.
+    // Recreating them on each session restart causes DH key mismatches and
+    // stale mDNS advertisements, breaking fast user handoff.
+    let session_config_base = {
+        let mut c = SessionConfig::default();
+        c.ap_port = Some(443);
+        c
+    };
+    let device_id = session_config_base.device_id.clone();
+    let client_id = session_config_base.client_id.clone();
+
+    let discovery = match Discovery::builder(device_id.clone(), client_id.clone())
+        .name(config.name.clone())
+        .device_type(DeviceType::Speaker)
+        .launch()
+    {
+        Ok(d) => d,
+        Err(e) => {
+            error!("Failed to start Zeroconf discovery: {e}");
+            return;
+        }
+    };
+    info!("Zeroconf discovery started as '{}'", config.name);
+
+    // Long-lived creds channel — survives session restarts.
+    let (creds_tx, mut creds_rx) = mpsc::channel::<Credentials>(1);
+    tokio::spawn(async move {
+        let mut discovery = discovery;
+        use futures_util::StreamExt;
+        while let Some(new_creds) = discovery.next().await {
+            info!("Zeroconf: new user '{}' connecting, triggering switch...", new_creds.username.as_deref().unwrap_or("?"));
+            if creds_tx.send(new_creds).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    // Single session lifetime. User switches trigger process exit + systemd restart.
     loop {
-        if let Err(e) = run_session(&config, &state, &mut cmd_rx).await {
-            let msg = format!("Spotify session error: {e}, restarting in 2s...");
-            error!("{msg}");
-            state.write().await.push_log(msg);
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        match run_session(
+            &config,
+            &state,
+            &mut cmd_rx,
+            &mut creds_rx,
+            &session_config_base,
+        ).await {
+            Ok(()) => return,
+            Err(e) => {
+                error!("Spotify session error: {e}, restarting...");
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
         }
     }
 }
 
-/// Outer loop: manages session, discovery, credentials.
-/// Only recreated on actual session errors (auth failure, network down).
+/// Manages a single Spotify session: auth, spclient, dealer, player, spirc.
+/// Recreated on user switch or session errors. Discovery stays up in run().
 async fn run_session(
     config: &Config,
     state: &AppState,
     cmd_rx: &mut mpsc::Receiver<SpotifyCommand>,
+    creds_rx: &mut mpsc::Receiver<Credentials>,
+    session_config_base: &SessionConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut session_config = SessionConfig::default();
-    session_config.ap_port = Some(443);
-    let device_id = session_config.device_id.clone();
-    let client_id = session_config.client_id.clone();
-
     let cache = Cache::new(
         Some(config.cache.clone()),
         None,
@@ -59,32 +102,23 @@ async fn run_session(
         None,
     )?;
 
-    // Always start Zeroconf discovery so Spotify sees us on the local network.
-    let mut discovery = Discovery::builder(device_id, client_id)
-        .name(config.name.clone())
-        .device_type(DeviceType::Speaker)
-        .launch()?;
-    info!("Zeroconf discovery started as '{}'", config.name);
-
     let credentials = if let Some(creds) = cache.credentials() {
-        info!("Using cached credentials");
+        info!("Using cached credentials for '{}'", creds.username.as_deref().unwrap_or("?"));
         creds
     } else {
         info!("Waiting for Spotify app to connect...");
-        use futures_util::StreamExt;
-        let creds = discovery.next().await
-            .ok_or("Discovery stream ended without credentials")?;
+        let creds = creds_rx.recv().await
+            .ok_or("Credentials channel closed")?;
         info!("Received credentials via Zeroconf");
+        // Save for next startup
+        let tmp_cache = Cache::new(Some(config.cache.clone()), None, None, None).ok();
+        if let Some(c) = tmp_cache.as_ref() {
+            c.save_credentials(&creds);
+        }
         creds
     };
 
-    // Keep discovery alive in the background for LAN visibility
-    tokio::spawn(async move {
-        use futures_util::StreamExt;
-        while let Some(_creds) = discovery.next().await {}
-    });
-
-    let session = Session::new(session_config, Some(cache));
+    let session = Session::new(session_config_base.clone(), Some(cache));
 
     {
         let mut s = state.write().await;
@@ -93,7 +127,7 @@ async fn run_session(
 
     // Inner loop: recreates player/spirc on device switch, reuses session.
     loop {
-        match run_spirc(config, state, cmd_rx, &session, &credentials).await {
+        match run_spirc(config, state, cmd_rx, creds_rx, &session, &credentials).await {
             Ok(SpircExit::DeviceSwitch) => {
                 info!("Device switched, recreating player...");
                 continue;
@@ -119,6 +153,7 @@ async fn run_spirc(
     config: &Config,
     state: &AppState,
     cmd_rx: &mut mpsc::Receiver<SpotifyCommand>,
+    creds_rx: &mut mpsc::Receiver<Credentials>,
     session: &Session,
     credentials: &Credentials,
 ) -> Result<SpircExit, Box<dyn std::error::Error + Send + Sync>> {
@@ -162,6 +197,7 @@ async fn run_spirc(
         ..Default::default()
     };
 
+    let t0 = std::time::Instant::now();
     let (spirc, spirc_task) = Spirc::new(
         connect_config,
         session.clone(),
@@ -169,14 +205,12 @@ async fn run_spirc(
         player,
         mixer,
     ).await?;
-
-    let msg = format!("Spirc started, device '{}' visible on Spotify Connect", config.name);
-    info!("{msg}");
-    let mut s = state.write().await;
-    s.push_log(msg);
-    s.restarting = false;
-    drop(s);
-
+    info!("Spirc ready in {}ms, device '{}' visible", t0.elapsed().as_millis(), config.name);
+    {
+        let mut s = state.write().await;
+        s.restarting = false;
+        s.active_user = credentials.username.clone().unwrap_or_default();
+    }
 
     let spirc_handle = tokio::spawn(spirc_task);
 
@@ -208,13 +242,10 @@ async fn run_spirc(
                                 s.cover_url = cover_url;
                                 s.last_track_uri = track_id.to_string();
                                 s.last_position_ms = position_ms;
-                                let msg = format!("Playing: {} - {}", s.artist, s.track);
-                                info!("{msg}");
-                                s.push_log(msg);
+                                info!("Playing: {} - {}", s.artist, s.track);
                             }
                             Err(e) => {
                                 warn!("Failed to fetch track metadata: {e}");
-                                state.write().await.push_log(format!("WARN: metadata fetch failed: {e}"));
                             }
                         }
                     }
@@ -264,10 +295,8 @@ async fn run_spirc(
                         let _ = spirc.disconnect(true);
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-                        let msg = format!("Switching output device to '{dev}' — reselect in Spotify app");
-                        info!("{msg}");
+                        info!("Switching output device to '{dev}' — reselect in Spotify app");
                         let mut s = state.write().await;
-                        s.push_log(msg);
                         s.restarting = true;
                         s.playing = false;
                         s.device = dev;
@@ -275,9 +304,37 @@ async fn run_spirc(
 
                         break Ok(SpircExit::DeviceSwitch);
                     }
+                    Some(SpotifyCommand::Release) => {
+                        info!("Release requested: full process restart to clear client-side caches");
+                        let _ = spirc.disconnect(true);
+                        let _ = std::fs::remove_file(config.cache.join("credentials.json"));
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        // systemd restarts us within ~1s, everyone's Spotify app
+                        // sees the device disappear and reappear, forcing fresh Zeroconf.
+                        std::process::exit(0);
+                    }
                     None => {
                         break Ok(SpircExit::Shutdown);
                     }
+                }
+            }
+            new_creds = creds_rx.recv() => {
+                if let Some(new_creds) = new_creds {
+                    let user = new_creds.username.as_deref().unwrap_or("?").to_string();
+                    let _ = spirc.disconnect(true);
+
+                    // Persist new creds to cache so the next process startup picks them up,
+                    // then exit. systemd restarts us in ~1s — mDNS advertisement briefly
+                    // drops and reappears, which flushes stale Spotify-app client state on
+                    // both sides. Every user switch = clean slate.
+                    let cache = Cache::new(Some(config.cache.clone()), None, None, None).ok();
+                    if let Some(c) = cache.as_ref() {
+                        c.save_credentials(&new_creds);
+                    }
+
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    info!("Handing off to '{user}' via process restart");
+                    std::process::exit(0);
                 }
             }
         }

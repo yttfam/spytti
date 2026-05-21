@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::audio;
+use crate::logs::LogBuffer;
 use crate::spotify::SpotifyCommand;
 use crate::state::AppState;
 
@@ -14,6 +15,7 @@ use crate::state::AppState;
 pub struct WebState {
     pub app: AppState,
     pub cmd_tx: mpsc::Sender<SpotifyCommand>,
+    pub log_buffer: LogBuffer,
 }
 
 #[derive(Serialize)]
@@ -26,6 +28,7 @@ struct StatusResponse {
     device: String,
     cover_url: String,
     restarting: bool,
+    active_user: String,
 }
 
 #[derive(Deserialize)]
@@ -44,6 +47,7 @@ pub fn router(state: WebState) -> Router {
         .route("/api/devices", get(devices))
         .route("/api/device", post(set_device))
         .route("/api/logs", get(logs))
+        .route("/api/release", post(release))
         .route("/api/health", get(health))
         .with_state(state)
 }
@@ -63,6 +67,7 @@ async fn status(State(state): State<WebState>) -> Json<StatusResponse> {
         device: s.device.clone(),
         cover_url: s.cover_url.clone(),
         restarting: s.restarting,
+        active_user: s.active_user.clone(),
     })
 }
 
@@ -119,7 +124,15 @@ async fn set_device(
 }
 
 async fn logs(State(state): State<WebState>) -> Json<Vec<String>> {
-    Json(state.app.read().await.logs.clone())
+    Json(crate::logs::snapshot(&state.log_buffer))
+}
+
+async fn release(State(state): State<WebState>) -> StatusCode {
+    if state.cmd_tx.send(SpotifyCommand::Release).await.is_ok() {
+        StatusCode::OK
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
 }
 
 async fn devices() -> Json<Vec<audio::AudioDevice>> {

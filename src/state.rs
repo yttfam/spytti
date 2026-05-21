@@ -1,8 +1,6 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-const MAX_LOG_LINES: usize = 200;
-
 #[derive(Clone, Default)]
 pub struct SharedState {
     pub playing: bool,
@@ -15,16 +13,7 @@ pub struct SharedState {
     pub restarting: bool,
     pub last_track_uri: String,
     pub last_position_ms: u32,
-    pub logs: Vec<String>,
-}
-
-impl SharedState {
-    pub fn push_log(&mut self, line: String) {
-        if self.logs.len() >= MAX_LOG_LINES {
-            self.logs.remove(0);
-        }
-        self.logs.push(line);
-    }
+    pub active_user: String,
 }
 
 pub type AppState = Arc<RwLock<SharedState>>;

@@ -174,7 +174,6 @@ input[type=range]::-webkit-slider-thumb {
   border-color: #1db954;
 }
 .log-btn {
-  margin-top: 2rem;
   background: none;
   border: 1px solid #333;
   color: #666;
@@ -228,6 +227,7 @@ input[type=range]::-webkit-slider-thumb {
   <div>
     <span class="status-dot" id="dot"></span>
     <span id="status-text" style="color:#888;font-size:0.85rem">Idle</span>
+    <span id="active-user" style="color:#666;font-size:0.8rem;margin-left:0.8rem"></span>
   </div>
   <div class="cover empty" id="cover-wrap">
     <img id="cover" src="" alt="">
@@ -257,7 +257,10 @@ input[type=range]::-webkit-slider-thumb {
     <div class="volume-value" id="vol-val">30</div>
   </div>
   <div class="restart-banner" id="restart-banner"></div>
-  <button class="log-btn" onclick="openLogs()">View Logs</button>
+  <div style="margin-top:2rem;display:flex;gap:0.5rem;justify-content:center">
+    <button class="log-btn" onclick="openLogs()">View Logs</button>
+    <button class="log-btn" onclick="releaseDevice()" title="Clear credentials and wait for next user">Release device</button>
+  </div>
 </div>
 
 <div class="log-overlay" id="log-overlay">
@@ -280,6 +283,7 @@ async function poll() {
     const d = await r.json();
     $('dot').className = 'status-dot' + (d.playing ? ' playing' : '');
     $('status-text').textContent = d.playing ? 'Playing' : 'Idle';
+    $('active-user').textContent = d.active_user ? '· ' + d.active_user : '';
     $('icon-play').style.display = d.playing ? 'none' : 'block';
     $('icon-pause').style.display = d.playing ? 'block' : 'none';
     $('track').textContent = d.track || '';
@@ -356,6 +360,11 @@ $('device').addEventListener('change', async () => {
     body: JSON.stringify({device: $('device').value})
   });
 });
+
+async function releaseDevice() {
+  if (!confirm('Release the device? The next person to select it in Spotify takes over.')) return;
+  await fetch('/api/release', {method: 'POST'});
+}
 
 async function openLogs() {
   $('log-overlay').classList.add('open');

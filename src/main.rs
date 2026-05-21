@@ -1,14 +1,27 @@
 mod audio;
 mod config;
+mod logs;
 mod spotify;
 mod state;
 mod web;
 
 use tracing::info;
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    let log_buffer = logs::new_buffer();
+
+    // Default to info, but crank librespot_discovery to debug so we can see
+    // every Zeroconf HTTP request (including failed auth attempts).
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,librespot_discovery=debug"));
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer())
+        .with(logs::CaptureLayer::new(log_buffer.clone()))
+        .init();
 
     let config = config::Config::load();
     let app_state = state::new_state(config.initial_volume, &config.device);
@@ -18,6 +31,7 @@ async fn main() {
     let web_state = web::WebState {
         app: app_state.clone(),
         cmd_tx,
+        log_buffer: log_buffer.clone(),
     };
 
     let port = config.port;
