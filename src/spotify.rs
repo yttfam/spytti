@@ -68,7 +68,9 @@ pub async fn run(
         }
     });
 
-    // Single session lifetime. User switches trigger process exit + systemd restart.
+    // User switches happen in-process: drop old session, build new one with new creds.
+    // Discovery + device_id stay stable so the Spotify app never sees the device blink.
+    let mut next_credentials: Option<Credentials> = None;
     loop {
         match run_session(
             &config,
@@ -76,8 +78,14 @@ pub async fn run(
             &mut cmd_rx,
             &mut creds_rx,
             &session_config_base,
+            next_credentials.take(),
         ).await {
-            Ok(()) => return,
+            Ok(SessionExit::Shutdown) => return,
+            Ok(SessionExit::SwitchTo(creds)) => {
+                let user = creds.username.as_deref().unwrap_or("?").to_string();
+                info!("Handing off to '{user}' in-process");
+                next_credentials = Some(creds);
+            }
             Err(e) => {
                 error!("Spotify session error: {e}, restarting...");
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -86,15 +94,22 @@ pub async fn run(
     }
 }
 
+enum SessionExit {
+    SwitchTo(Credentials),
+    Shutdown,
+}
+
 /// Manages a single Spotify session: auth, spclient, dealer, player, spirc.
-/// Recreated on user switch or session errors. Discovery stays up in run().
+/// Recreated on user switch (with `initial_credentials` passed in) or session errors.
+/// Discovery stays up in run().
 async fn run_session(
     config: &Config,
     state: &AppState,
     cmd_rx: &mut mpsc::Receiver<SpotifyCommand>,
     creds_rx: &mut mpsc::Receiver<Credentials>,
     session_config_base: &SessionConfig,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    initial_credentials: Option<Credentials>,
+) -> Result<SessionExit, Box<dyn std::error::Error + Send + Sync>> {
     let cache = Cache::new(
         Some(config.cache.clone()),
         None,
@@ -102,7 +117,10 @@ async fn run_session(
         None,
     )?;
 
-    let credentials = if let Some(creds) = cache.credentials() {
+    let credentials = if let Some(creds) = initial_credentials {
+        // Handed in by run() after a user switch; cache was updated by run_spirc.
+        creds
+    } else if let Some(creds) = cache.credentials() {
         info!("Using cached credentials for '{}'", creds.username.as_deref().unwrap_or("?"));
         creds
     } else {
@@ -110,7 +128,6 @@ async fn run_session(
         let creds = creds_rx.recv().await
             .ok_or("Credentials channel closed")?;
         info!("Received credentials via Zeroconf");
-        // Save for next startup
         let tmp_cache = Cache::new(Some(config.cache.clone()), None, None, None).ok();
         if let Some(c) = tmp_cache.as_ref() {
             c.save_credentials(&creds);
@@ -132,8 +149,11 @@ async fn run_session(
                 info!("Device switched, recreating player...");
                 continue;
             }
+            Ok(SpircExit::UserSwitch(new_creds)) => {
+                return Ok(SessionExit::SwitchTo(new_creds));
+            }
             Ok(SpircExit::Shutdown) => {
-                return Ok(());
+                return Ok(SessionExit::Shutdown);
             }
             Err(e) => {
                 return Err(e);
@@ -144,6 +164,7 @@ async fn run_session(
 
 enum SpircExit {
     DeviceSwitch,
+    UserSwitch(Credentials),
     Shutdown,
 }
 
@@ -321,20 +342,17 @@ async fn run_spirc(
             new_creds = creds_rx.recv() => {
                 if let Some(new_creds) = new_creds {
                     let user = new_creds.username.as_deref().unwrap_or("?").to_string();
+                    // Tell Spotify the old user is leaving this device (no-op if Not Active).
                     let _ = spirc.disconnect(true);
 
-                    // Persist new creds to cache so the next process startup picks them up,
-                    // then exit. systemd restarts us in ~1s — mDNS advertisement briefly
-                    // drops and reappears, which flushes stale Spotify-app client state on
-                    // both sides. Every user switch = clean slate.
+                    // Persist creds for the next cold start.
                     let cache = Cache::new(Some(config.cache.clone()), None, None, None).ok();
                     if let Some(c) = cache.as_ref() {
                         c.save_credentials(&new_creds);
                     }
 
-                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                    info!("Handing off to '{user}' via process restart");
-                    std::process::exit(0);
+                    info!("Swapping to '{user}' in-process");
+                    break Ok(SpircExit::UserSwitch(new_creds));
                 }
             }
         }
